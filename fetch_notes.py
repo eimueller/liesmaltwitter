@@ -3,7 +3,7 @@ import csv
 import os
 import zipfile
 import tempfile
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime, timezone
 
 CF_ACCOUNT_ID = os.environ["CF_ACCOUNT_ID"]
 CF_DATABASE_ID = os.environ["CF_DATABASE_ID"]
@@ -15,6 +15,7 @@ UA = {"User-Agent": "Mozilla/5.0"}
 
 ROWS_PER_STATEMENT = 14        # 14 Zeilen x 7 Spalten = 98 Parameter, unter dem D1-Limit von 100
 STATEMENTS_PER_REQUEST = 50    # so viele Einzel-Befehle werden per "batch" zu einer Anfrage gebündelt
+MAX_AGE_DAYS = 365             # nur Notes des letzten Jahres behalten
 
 
 def get_chunk_urls_for(day):
@@ -68,12 +69,29 @@ def flush_statements(statement_list):
     r.raise_for_status()
 
 
+def cleanup_old_notes():
+    cutoff_millis = int((datetime.now(timezone.utc) - timedelta(days=MAX_AGE_DAYS)).timestamp() * 1000)
+    r = requests.post(D1_URL, headers=HEADERS, json={
+        "sql": "DELETE FROM notes WHERE createdAtMillis < ?",
+        "params": [str(cutoff_millis)],
+    })
+    if not r.ok:
+        print("Fehler beim Aufräumen:", r.text[:500])
+    r.raise_for_status()
+
+
 def process_rows(reader):
+    cutoff_millis = int((datetime.now(timezone.utc) - timedelta(days=MAX_AGE_DAYS)).timestamp() * 1000)
+
     row_buffer = []
     statement_buffer = []
     total = 0
 
     for row in reader:
+        created = row.get("createdAtMillis")
+        if not created or int(created) < cutoff_millis:
+            continue  # zu alt, überspringen
+
         row_buffer.append((
             row.get("noteId"), row.get("tweetId"), row.get("createdAtMillis"),
             row.get("classification"), row.get("summary"),
@@ -129,3 +147,5 @@ if __name__ == "__main__":
         print(f"{url}: {n} Zeilen verarbeitet")
         grand_total += n
     print(f"Fertig, insgesamt {grand_total} Zeilen")
+    cleanup_old_notes()
+    print("Alte Notes außerhalb des Zeitfensters aufgeräumt")
