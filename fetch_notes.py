@@ -2,7 +2,8 @@ import requests
 import csv
 import io
 import os
-from datetime import date
+from datetime import date, timedelta
+
 
 CF_ACCOUNT_ID = os.environ["CF_ACCOUNT_ID"]
 CF_DATABASE_ID = os.environ["CF_DATABASE_ID"]
@@ -17,24 +18,31 @@ def run_sql(sql, params=None):
     r.raise_for_status()
     return r.json()
 
-
-def get_all_chunk_urls():
-    today = date.today()
-    base = f"https://ton.twimg.com/birdwatch-public-data/{today.year}/{today.month:02d}/{today.day:02d}/notes"
+def get_chunk_urls_for(day):
+    base = f"https://ton.twimg.com/birdwatch-public-data/{day.year}/{day.month:02d}/{day.day:02d}/notes"
     urls = []
     i = 0
     while True:
         url = f"{base}/notes-{i:05d}.tsv"
         r = requests.get(url, stream=True, headers={"User-Agent": "Mozilla/5.0"})
-        if r.status_code != 200:
-            r.close()
-            print(f"{url} -> Status {r.status_code}, stoppe hier")
-            break
+        status = r.status_code
         r.close()
+        if status != 200:
+            break
         urls.append(url)
         i += 1
     return urls
 
+
+def get_all_chunk_urls():
+    today = date.today()
+    urls = get_chunk_urls_for(today)
+    if urls:
+        print(f"Nutze heutigen Snapshot: {today}")
+        return urls
+    yesterday = today - timedelta(days=1)
+    print(f"Heute ({today}) nichts gefunden, versuche gestern ({yesterday})")
+    return get_chunk_urls_for(yesterday)
 
 def stream_and_insert(url):
     with requests.get(url, stream=True) as resp:
