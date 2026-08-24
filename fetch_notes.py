@@ -25,9 +25,12 @@ def get_all_chunk_urls():
     i = 0
     while True:
         url = f"{base}/notes-{i:05d}.tsv"
-        head = requests.head(url)
-        if head.status_code != 200:
+        r = requests.get(url, stream=True, headers={"User-Agent": "Mozilla/5.0"})
+        if r.status_code != 200:
+            r.close()
+            print(f"{url} -> Status {r.status_code}, stoppe hier")
             break
+        r.close()
         urls.append(url)
         i += 1
     return urls
