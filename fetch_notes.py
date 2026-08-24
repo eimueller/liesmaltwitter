@@ -1,6 +1,5 @@
 import requests
 import csv
-import io
 import os
 import zipfile
 import tempfile
@@ -14,11 +13,8 @@ D1_URL = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/d1/data
 HEADERS = {"Authorization": f"Bearer {CF_API_TOKEN}", "Content-Type": "application/json"}
 UA = {"User-Agent": "Mozilla/5.0"}
 
-
-def run_sql(sql, params=None):
-    r = requests.post(D1_URL, headers=HEADERS, json={"sql": sql, "params": params or []})
-    r.raise_for_status()
-    return r.json()
+ROWS_PER_STATEMENT = 14       # 14 Zeilen x 7 Spalten = 98 Parameter, unter dem D1-Limit von 100
+STATEMENTS_PER_REQUEST = 100  # so viele SQL-Befehle werden pro Web-Anfrage gebündelt
 
 
 def get_chunk_urls_for(day):
@@ -54,23 +50,51 @@ def get_all_chunk_urls():
     return get_chunk_urls_for(yesterday)
 
 
+def make_insert_statement(rows):
+    values_sql = ",".join(["(?,?,?,?,?,?,?)"] * len(rows))
+    flat_params = [str(v) for row in rows for v in row]
+    return {
+        "sql": "INSERT OR IGNORE INTO notes "
+               "(noteId, tweetId, createdAtMillis, classification, summary, trustworthySources, isMediaNote) "
+               f"VALUES {values_sql}",
+        "params": flat_params,
+    }
+
+
+def flush_statements(statements):
+    if not statements:
+        return
+    r = requests.post(D1_URL, headers=HEADERS, json={"batch": statements})
+    r.raise_for_status()
+
+
 def process_rows(reader):
-    batch = []
+    row_buffer = []
+    statement_buffer = []
     total = 0
+
     for row in reader:
-        batch.append((
+        row_buffer.append((
             row.get("noteId"), row.get("tweetId"), row.get("createdAtMillis"),
             row.get("classification"), row.get("summary"),
             1 if row.get("trustworthySources") == "1" else 0,
             1 if row.get("isMediaNote") == "1" else 0,
         ))
-        if len(batch) >= 500:
-            insert_batch(batch)
-            total += len(batch)
-            batch = []
-    if batch:
-        insert_batch(batch)
-        total += len(batch)
+        total += 1
+
+        if len(row_buffer) >= ROWS_PER_STATEMENT:
+            statement_buffer.append(make_insert_statement(row_buffer))
+            row_buffer = []
+
+        if len(statement_buffer) >= STATEMENTS_PER_REQUEST:
+            flush_statements(statement_buffer)
+            statement_buffer = []
+            print(f"  ...{total} Zeilen verarbeitet", flush=True)
+
+    if row_buffer:
+        statement_buffer.append(make_insert_statement(row_buffer))
+    flush_statements(statement_buffer)
+
     return total
 
 
@@ -95,22 +119,12 @@ def stream_and_insert_zip(url):
                 return process_rows(csv.DictReader(lines, delimiter="\t"))
 
 
-def insert_batch(rows):
-    values_sql = ",".join(["(?,?,?,?,?,?,?)"] * len(rows))
-    flat_params = [v for row in rows for v in row]
-    run_sql(
-        "INSERT OR IGNORE INTO notes "
-        "(noteId, tweetId, createdAtMillis, classification, summary, trustworthySources, isMediaNote) "
-        f"VALUES {values_sql}",
-        flat_params,
-    )
-
-
 if __name__ == "__main__":
     chunks = get_all_chunk_urls()
     print(f"{len(chunks)} Chunk-Dateien gefunden")
     grand_total = 0
     for url, is_zip in chunks:
+        print(f"Verarbeite: {url}")
         n = stream_and_insert_zip(url) if is_zip else stream_and_insert_tsv(url)
         print(f"{url}: {n} Zeilen verarbeitet")
         grand_total += n
