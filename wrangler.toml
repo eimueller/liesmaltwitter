@@ -1,0 +1,8 @@
+name = "notes-worker"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "notes-db"
+database_id = "661ca87b-f64e-4190-b887-370486f2c9bd"
