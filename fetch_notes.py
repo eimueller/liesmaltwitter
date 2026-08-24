@@ -14,7 +14,7 @@ HEADERS = {"Authorization": f"Bearer {CF_API_TOKEN}", "Content-Type": "applicati
 UA = {"User-Agent": "Mozilla/5.0"}
 
 ROWS_PER_STATEMENT = 14        # 14 Zeilen x 7 Spalten = 98 Parameter, unter dem D1-Limit von 100
-STATEMENTS_PER_REQUEST = 50    # so viele Einzel-Befehle werden per Semikolon zu einer Anfrage verbunden
+STATEMENTS_PER_REQUEST = 50    # so viele Einzel-Befehle werden per "batch" zu einer Anfrage gebündelt
 
 
 def get_chunk_urls_for(day):
@@ -50,22 +50,19 @@ def get_all_chunk_urls():
     return get_chunk_urls_for(yesterday)
 
 
-def make_insert_sql_and_params(rows):
+def make_insert_statement(rows):
     values_sql = ",".join(["(?,?,?,?,?,?,?)"] * len(rows))
+    params = [str(v) for row in rows for v in row]
     sql = ("INSERT OR IGNORE INTO notes "
            "(noteId, tweetId, createdAtMillis, classification, summary, trustworthySources, isMediaNote) "
            f"VALUES {values_sql}")
-    params = [str(v) for row in rows for v in row]
-    return sql, params
+    return {"sql": sql, "params": params}
 
 
 def flush_statements(statement_list):
     if not statement_list:
         return
-    combined_sql = ";".join(sql for sql, _ in statement_list)
-    combined_params = [p for _, params in statement_list for p in params]
-
-    r = requests.post(D1_URL, headers=HEADERS, json={"sql": combined_sql, "params": combined_params})
+    r = requests.post(D1_URL, headers=HEADERS, json={"batch": statement_list})
     if not r.ok:
         print("D1-Fehlerantwort:", r.text[:1000])
     r.raise_for_status()
@@ -86,7 +83,7 @@ def process_rows(reader):
         total += 1
 
         if len(row_buffer) >= ROWS_PER_STATEMENT:
-            statement_buffer.append(make_insert_sql_and_params(row_buffer))
+            statement_buffer.append(make_insert_statement(row_buffer))
             row_buffer = []
 
         if len(statement_buffer) >= STATEMENTS_PER_REQUEST:
@@ -95,7 +92,7 @@ def process_rows(reader):
             print(f"  ...{total} Zeilen verarbeitet", flush=True)
 
     if row_buffer:
-        statement_buffer.append(make_insert_sql_and_params(row_buffer))
+        statement_buffer.append(make_insert_statement(row_buffer))
     flush_statements(statement_buffer)
 
     return total
