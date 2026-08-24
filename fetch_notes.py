@@ -13,8 +13,8 @@ D1_URL = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/d1/data
 HEADERS = {"Authorization": f"Bearer {CF_API_TOKEN}", "Content-Type": "application/json"}
 UA = {"User-Agent": "Mozilla/5.0"}
 
-ROWS_PER_STATEMENT = 14       # 14 Zeilen x 7 Spalten = 98 Parameter, unter dem D1-Limit von 100
-STATEMENTS_PER_REQUEST = 100  # so viele SQL-Befehle werden pro Web-Anfrage gebündelt
+ROWS_PER_STATEMENT = 14        # 14 Zeilen x 7 Spalten = 98 Parameter, unter dem D1-Limit von 100
+STATEMENTS_PER_REQUEST = 50    # so viele Einzel-Befehle werden per Semikolon zu einer Anfrage verbunden
 
 
 def get_chunk_urls_for(day):
@@ -50,21 +50,24 @@ def get_all_chunk_urls():
     return get_chunk_urls_for(yesterday)
 
 
-def make_insert_statement(rows):
+def make_insert_sql_and_params(rows):
     values_sql = ",".join(["(?,?,?,?,?,?,?)"] * len(rows))
-    flat_params = [str(v) for row in rows for v in row]
-    return {
-        "sql": "INSERT OR IGNORE INTO notes "
-               "(noteId, tweetId, createdAtMillis, classification, summary, trustworthySources, isMediaNote) "
-               f"VALUES {values_sql}",
-        "params": flat_params,
-    }
+    sql = ("INSERT OR IGNORE INTO notes "
+           "(noteId, tweetId, createdAtMillis, classification, summary, trustworthySources, isMediaNote) "
+           f"VALUES {values_sql}")
+    params = [str(v) for row in rows for v in row]
+    return sql, params
 
 
-def flush_statements(statements):
-    if not statements:
+def flush_statements(statement_list):
+    if not statement_list:
         return
-    r = requests.post(D1_URL, headers=HEADERS, json={"batch": statements})
+    combined_sql = ";".join(sql for sql, _ in statement_list)
+    combined_params = [p for _, params in statement_list for p in params]
+
+    r = requests.post(D1_URL, headers=HEADERS, json={"sql": combined_sql, "params": combined_params})
+    if not r.ok:
+        print("D1-Fehlerantwort:", r.text[:1000])
     r.raise_for_status()
 
 
@@ -83,7 +86,7 @@ def process_rows(reader):
         total += 1
 
         if len(row_buffer) >= ROWS_PER_STATEMENT:
-            statement_buffer.append(make_insert_statement(row_buffer))
+            statement_buffer.append(make_insert_sql_and_params(row_buffer))
             row_buffer = []
 
         if len(statement_buffer) >= STATEMENTS_PER_REQUEST:
@@ -92,7 +95,7 @@ def process_rows(reader):
             print(f"  ...{total} Zeilen verarbeitet", flush=True)
 
     if row_buffer:
-        statement_buffer.append(make_insert_statement(row_buffer))
+        statement_buffer.append(make_insert_sql_and_params(row_buffer))
     flush_statements(statement_buffer)
 
     return total
