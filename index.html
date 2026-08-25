@@ -31,7 +31,6 @@
   }
 
   h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
-
   .subtitle { color: var(--text-secondary); font-size: 14px; margin: 0 0 8px; }
 
   #stand {
@@ -67,7 +66,6 @@
   }
 
   .row2 { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
-
   select#sort { margin-left: auto; }
 
   button {
@@ -114,7 +112,6 @@
   .note a.link:hover { color: var(--text-primary); }
 
   .note-embed { padding: 12px 4px; border-bottom: 1px solid var(--border); }
-
   .status { color: var(--text-secondary); font-size: 14px; padding: 24px 4px; }
 
   @media (max-width: 560px) {
@@ -228,9 +225,8 @@ async function toggleEmbeds() {
 }
 
 async function fetchOembedHtml(tweetId) {
-  const url = `https://publish.x.com/oembed?url=https://x.com/i/web/status/${tweetId}&omit_script=true&dnt=true`;
   try {
-    const res = await fetch(url);
+    const res = await fetch(`${WORKER_URL}/oembed?tweetId=${tweetId}`);
     if (!res.ok) return null;
     const data = await res.json();
     return data.html || null;
