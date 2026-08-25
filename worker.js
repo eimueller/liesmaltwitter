@@ -10,54 +10,18 @@ export default {
       return handleStatus(env);
     }
 
-    if (url.pathname === "/oembed") {
-      return handleOembed(url);
-    }
-
     return handleSearch(url, env);
   },
 };
 
 async function handleStatus(env) {
-  const notesResult = await env.DB.prepare(
+  const { results } = await env.DB.prepare(
     "SELECT COUNT(*) as total, MAX(createdAtMillis) as newest, MIN(createdAtMillis) as oldest FROM notes"
   ).all();
 
-  const metaResult = await env.DB.prepare("SELECT key, value FROM meta").all();
-  const meta = {};
-  for (const row of metaResult.results) meta[row.key] = row.value;
-
-  return new Response(JSON.stringify({ ...notesResult.results[0], ...meta }), {
+  return new Response(JSON.stringify(results[0]), {
     headers: { "Content-Type": "application/json", ...corsHeaders() },
   });
-}
-
-async function handleOembed(url) {
-  const tweetId = url.searchParams.get("tweetId");
-  if (!tweetId) {
-    return new Response(JSON.stringify({ html: null }), {
-      headers: { "Content-Type": "application/json", ...corsHeaders() },
-    });
-  }
-
-  const oembedUrl = `https://publish.x.com/oembed?url=https://x.com/i/web/status/${tweetId}&omit_script=true&dnt=true`;
-
-  try {
-    const r = await fetch(oembedUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
-    if (!r.ok) {
-      return new Response(JSON.stringify({ html: null }), {
-        headers: { "Content-Type": "application/json", ...corsHeaders() },
-      });
-    }
-    const data = await r.json();
-    return new Response(JSON.stringify({ html: data.html || null }), {
-      headers: { "Content-Type": "application/json", ...corsHeaders() },
-    });
-  } catch (e) {
-    return new Response(JSON.stringify({ html: null }), {
-      headers: { "Content-Type": "application/json", ...corsHeaders() },
-    });
-  }
 }
 
 async function handleSearch(url, env) {
@@ -93,6 +57,8 @@ async function handleSearch(url, env) {
   });
 }
 
+// Baut aus "wort1 AND wort2 OR wort3" die SQL-Bedingung:
+// (summary LIKE %wort1% AND summary LIKE %wort2%) OR (summary LIKE %wort3%)
 function buildKeywordClause(q) {
   if (!q.trim()) return { clause: "", params: [] };
 
@@ -113,7 +79,7 @@ function buildKeywordClause(q) {
 
 function corsHeaders() {
   return {
-    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Origin": "https://eimueller.github.io",
     "Access-Control-Allow-Methods": "GET, OPTIONS",
   };
 }
