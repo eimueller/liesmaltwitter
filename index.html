@@ -39,6 +39,7 @@
     font-size: 12px;
     color: var(--text-secondary);
     margin: 0 0 20px;
+    line-height: 1.6;
   }
 
   .filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
@@ -65,7 +66,7 @@
     padding: 0 10px; border-radius: 6px;
   }
 
-  .row2 { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 20px; }
+  .row2 { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
 
   select#sort { margin-left: auto; }
 
@@ -74,6 +75,16 @@
     padding: 9px 18px; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer;
   }
   button:hover { opacity: 0.85; }
+  button:disabled { opacity: 0.5; cursor: default; }
+
+  #embed-controls { margin-bottom: 20px; }
+  #embed-controls button {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    font-weight: 400;
+    font-size: 13px;
+  }
 
   #ergebnisse { display: flex; flex-direction: column; }
 
@@ -97,15 +108,12 @@
 
   .note .text { font-size: 14px; word-break: break-word; }
 
-  mark.hl {
-    background: #e8c547;
-    color: #1a1a1a;
-    padding: 0 2px;
-    border-radius: 2px;
-  }
+  mark.hl { background: #e8c547; color: #1a1a1a; padding: 0 2px; border-radius: 2px; }
 
   .note a.link { color: var(--text-secondary); text-decoration: none; font-size: 16px; padding-top: 2px; }
   .note a.link:hover { color: var(--text-primary); }
+
+  .note-embed { padding: 12px 4px; border-bottom: 1px solid var(--border); }
 
   .status { color: var(--text-secondary); font-size: 14px; padding: 24px 4px; }
 
@@ -123,7 +131,7 @@
 <body>
 
 <h1>Community Notes durchsuchen</h1>
-<p class="subtitle">Archiv der letzten 12 Monate, täglich aktualisiert</p>
+<p class="subtitle">Archiv der letzten Monate, täglich aktualisiert</p>
 <p id="stand">Lade Status...</p>
 
 <div class="filters">
@@ -147,10 +155,18 @@
   <button onclick="suchen()">Suchen</button>
 </div>
 
+<div class="row2" id="embed-controls">
+  <button id="embedToggle" onclick="toggleEmbeds()">Original-Tweets anzeigen (lädt Cookies von X)</button>
+  <label id="availOnlyLabel" style="display:none;">
+    <input type="checkbox" id="availOnly" onchange="suchen()"> Nur verfügbare Original-Tweets anzeigen
+  </label>
+</div>
+
 <div id="ergebnisse"><div class="status">Gib einen Suchbegriff ein oder klicke direkt auf „Suchen“.</div></div>
 
 <script>
 const WORKER_URL = "https://notes-worker.twitterdbworker.workers.dev";
+let embedsEnabled = false;
 
 function tagInfo(classification) {
   if (classification === "MISINFORMED_OR_POTENTIALLY_MISLEADING") return { css: "misleading", label: "Irreführend" };
@@ -168,14 +184,9 @@ function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// Nimmt den bereits escapten Text und markiert alle Such-Einzelwörter gelb
 function highlight(escapedText, query) {
   if (!query.trim()) return escapedText;
-  const terms = query
-    .split(/\s+(?:AND|OR)\s+/i)
-    .map(t => t.trim())
-    .filter(Boolean);
-
+  const terms = query.split(/\s+(?:AND|OR)\s+/i).map(t => t.trim()).filter(Boolean);
   let result = escapedText;
   for (const term of terms) {
     const re = new RegExp(escapeRegex(term), "gi");
@@ -184,18 +195,67 @@ function highlight(escapedText, query) {
   return result;
 }
 
+function renderPlainNote(n) {
+  const tag = tagInfo(n.classification);
+  const date = new Date(Number(n.createdAtMillis)).toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
+  const link = n.tweetId ? `https://x.com/i/web/status/${n.tweetId}` : null;
+  const text = highlight(escapeHtml(n.summary), document.getElementById("q").value);
+  return `
+    <div class="note ${tag.css}">
+      <div class="date">${date}<div class="tag ${tag.css}">${tag.label}</div></div>
+      <div class="text">${text}</div>
+      ${link ? `<a class="link" href="${link}" target="_blank" rel="noopener" title="Original-Post öffnen">↗</a>` : "<span></span>"}
+    </div>`;
+}
+
+function loadTwitterWidgetScript() {
+  return new Promise((resolve) => {
+    if (window.twttr) return resolve();
+    const s = document.createElement("script");
+    s.src = "https://platform.twitter.com/widgets.js";
+    s.onload = resolve;
+    document.body.appendChild(s);
+  });
+}
+
+async function toggleEmbeds() {
+  embedsEnabled = true;
+  document.getElementById("embedToggle").textContent = "Original-Tweets aktiv ✓";
+  document.getElementById("embedToggle").disabled = true;
+  document.getElementById("availOnlyLabel").style.display = "flex";
+  await loadTwitterWidgetScript();
+  suchen();
+}
+
+async function fetchOembedHtml(tweetId) {
+  const url = `https://publish.x.com/oembed?url=https://x.com/i/web/status/${tweetId}&omit_script=true&dnt=true`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.html || null;
+  } catch (e) {
+    return null;
+  }
+}
+
 async function ladeStatus() {
   try {
     const res = await fetch(`${WORKER_URL}/status`);
     const data = await res.json();
     const neuestesDatum = new Date(Number(data.newest)).toLocaleString("de-DE");
     const aeltestesDatum = new Date(Number(data.oldest)).toLocaleDateString("de-DE");
-    document.getElementById("stand").textContent =
-      `Stand: ${data.total.toLocaleString("de-DE")} Notes gespeichert · Zeitraum ${aeltestesDatum} bis ${neuestesDatum}`;
+    const letzterVersuch = data.last_attempt ? new Date(data.last_attempt).toLocaleString("de-DE") : "unbekannt";
+    const statusText = data.last_status === "ok" ? "erfolgreich" : data.last_status === "error" ? "fehlgeschlagen" : "unbekannt";
+
+    document.getElementById("stand").innerHTML =
+      `Stand: ${data.total.toLocaleString("de-DE")} Notes · Zeitraum ${aeltestesDatum} bis ${neuestesDatum}<br>` +
+      `Letzter Update-Versuch: ${letzterVersuch} (${statusText})`;
   } catch (e) {
     document.getElementById("stand").textContent = "Status konnte nicht geladen werden.";
   }
 }
+
 async function suchen() {
   const params = new URLSearchParams();
   const q = document.getElementById("q").value;
@@ -215,34 +275,53 @@ async function suchen() {
   const box = document.getElementById("ergebnisse");
   box.innerHTML = '<div class="status">Lädt...</div>';
 
+  let notes;
   try {
     const res = await fetch(`${WORKER_URL}?${params}`);
-    const notes = await res.json();
-
-    if (notes.length === 0) {
-      box.innerHTML = '<div class="status">Keine Treffer gefunden.</div>';
-      return;
-    }
-
-    box.innerHTML = notes.map(n => {
-      const tag = tagInfo(n.classification);
-      const date = new Date(Number(n.createdAtMillis)).toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
-      const link = n.tweetId ? `https://x.com/i/web/status/${n.tweetId}` : null;
-      const text = highlight(escapeHtml(n.summary), q);
-      return `
-        <div class="note ${tag.css}">
-          <div class="date">${date}<div class="tag ${tag.css}">${tag.label}</div></div>
-          <div class="text">${text}</div>
-          ${link ? `<a class="link" href="${link}" target="_blank" rel="noopener" title="Original-Post öffnen">↗</a>` : "<span></span>"}
-        </div>`;
-    }).join("");
+    notes = await res.json();
   } catch (e) {
     box.innerHTML = '<div class="status">Fehler beim Laden. Ist die Worker-URL korrekt?</div>';
+    return;
   }
+
+  if (notes.length === 0) {
+    box.innerHTML = '<div class="status">Keine Treffer gefunden.</div>';
+    return;
+  }
+
+  if (!embedsEnabled) {
+    box.innerHTML = notes.map(n => renderPlainNote(n)).join("");
+    return;
+  }
+
+  box.innerHTML = '<div class="status">Lade Original-Tweets...</div>';
+  const withEmbeds = await Promise.all(notes.map(async n => {
+    const html = n.tweetId ? await fetchOembedHtml(n.tweetId) : null;
+    return { note: n, embedHtml: html };
+  }));
+
+  const availOnly = document.getElementById("availOnly").checked;
+  const visible = availOnly ? withEmbeds.filter(x => x.embedHtml) : withEmbeds;
+
+  if (visible.length === 0) {
+    box.innerHTML = '<div class="status">Keine Treffer (mit verfügbarem Original-Tweet).</div>';
+    return;
+  }
+
+  box.innerHTML = visible.map(x => {
+    if (x.embedHtml) {
+      return `<div class="note-embed">${x.embedHtml}</div>`;
+    }
+    return renderPlainNote(x.note) + '<div class="status" style="padding:0 4px 16px;">Original-Tweet nicht verfügbar (gelöscht/privat)</div>';
+  }).join("");
+
+  if (window.twttr) window.twttr.widgets.load();
 }
+
 document.getElementById("q").addEventListener("keydown", (e) => {
   if (e.key === "Enter") suchen();
 });
+
 ladeStatus();
 </script>
 </body>
