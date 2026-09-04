@@ -3,6 +3,7 @@ import csv
 import os
 import zipfile
 import tempfile
+import traceback
 from datetime import date, timedelta, datetime, timezone
 
 CF_ACCOUNT_ID = os.environ["CF_ACCOUNT_ID"]
@@ -13,9 +14,31 @@ D1_URL = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/d1/data
 HEADERS = {"Authorization": f"Bearer {CF_API_TOKEN}", "Content-Type": "application/json"}
 UA = {"User-Agent": "Mozilla/5.0"}
 
-ROWS_PER_STATEMENT = 14        # 14 Zeilen x 7 Spalten = 98 Parameter, unter dem D1-Limit von 100
-STATEMENTS_PER_REQUEST = 50    # so viele Einzel-Befehle werden per "batch" zu einer Anfrage gebündelt
-MAX_AGE_DAYS = 365             # nur Notes des letzten Jahres behalten
+ROWS_PER_STATEMENT = 12        # 12 Zeilen x 8 Spalten = 96 Parameter, unter dem D1-Limit von 100
+STATEMENTS_PER_REQUEST = 50
+MAX_AGE_DAYS = 365
+
+
+def set_meta(key, value):
+    r = requests.post(D1_URL, headers=HEADERS, json={
+        "sql": "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+        "params": [key, value],
+    })
+    r.raise_for_status()
+
+
+def query_d1(sql):
+    r = requests.post(D1_URL, headers=HEADERS, json={"sql": sql})
+    r.raise_for_status()
+    return r.json()["result"][0]["results"]
+
+
+def update_stats():
+    rows = query_d1("SELECT COUNT(*) as total, MAX(createdAtMillis) as newest, MIN(createdAtMillis) as oldest FROM notes")
+    row = rows[0]
+    set_meta("total", str(row["total"]))
+    set_meta("newest", str(row["newest"]))
+    set_meta("oldest", str(row["oldest"]))
 
 
 def get_chunk_urls_for(day):
@@ -33,7 +56,7 @@ def get_chunk_urls_for(day):
                 found = (url, is_zip)
                 break
         if not found:
-            print(f"notes-{i:05d} -> nichts gefunden (weder .zip noch .tsv), stoppe hier")
+            print(f"notes-{i:05d} -> nichts gefunden, stoppe hier")
             break
         chunks.append(found)
         i += 1
@@ -52,10 +75,10 @@ def get_all_chunk_urls():
 
 
 def make_insert_statement(rows):
-    values_sql = ",".join(["(?,?,?,?,?,?,?)"] * len(rows))
+    values_sql = ",".join(["(?,?,?,?,?,?,?,?)"] * len(rows))
     params = [str(v) for row in rows for v in row]
     sql = ("INSERT OR IGNORE INTO notes "
-           "(noteId, tweetId, createdAtMillis, classification, summary, trustworthySources, isMediaNote) "
+           "(noteId, tweetId, createdAtMillis, classification, summary, trustworthySources, isMediaNote, isCollaborativeNote) "
            f"VALUES {values_sql}")
     return {"sql": sql, "params": params}
 
@@ -90,13 +113,14 @@ def process_rows(reader):
     for row in reader:
         created = row.get("createdAtMillis")
         if not created or int(created) < cutoff_millis:
-            continue  # zu alt, überspringen
+            continue
 
         row_buffer.append((
             row.get("noteId"), row.get("tweetId"), row.get("createdAtMillis"),
             row.get("classification"), row.get("summary"),
             1 if row.get("trustworthySources") == "1" else 0,
             1 if row.get("isMediaNote") == "1" else 0,
+            1 if row.get("isCollaborativeNote") == "1" else 0,
         ))
         total += 1
 
@@ -137,7 +161,7 @@ def stream_and_insert_zip(url):
                 return process_rows(csv.DictReader(lines, delimiter="\t"))
 
 
-if __name__ == "__main__":
+def run():
     chunks = get_all_chunk_urls()
     print(f"{len(chunks)} Chunk-Dateien gefunden")
     grand_total = 0
@@ -149,3 +173,20 @@ if __name__ == "__main__":
     print(f"Fertig, insgesamt {grand_total} Zeilen")
     cleanup_old_notes()
     print("Alte Notes außerhalb des Zeitfensters aufgeräumt")
+    update_stats()
+    print("Statistik aktualisiert")
+    return grand_total
+
+
+if __name__ == "__main__":
+    started_at = datetime.now(timezone.utc).isoformat()
+    set_meta("last_attempt", started_at)
+
+    try:
+        run()
+        set_meta("last_status", "ok")
+        set_meta("last_success", datetime.now(timezone.utc).isoformat())
+    except Exception:
+        set_meta("last_status", "error")
+        set_meta("last_error", traceback.format_exc()[:500])
+        raise
