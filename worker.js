@@ -19,19 +19,26 @@ export default {
 };
 
 async function handleStatus(env) {
-  const metaResult = await env.DB.prepare("SELECT key, value FROM meta").all();
-  const meta = {};
-  for (const row of metaResult.results) meta[row.key] = row.value;
+  try {
+    const metaResult = await env.DB.prepare("SELECT key, value FROM meta").all();
+    const meta = {};
+    for (const row of metaResult.results) meta[row.key] = row.value;
 
-  return new Response(JSON.stringify({
-    total: meta.total ? Number(meta.total) : null,
-    newest: meta.newest || null,
-    oldest: meta.oldest || null,
-    last_attempt: meta.last_attempt || null,
-    last_status: meta.last_status || null,
-  }), {
-    headers: { "Content-Type": "application/json", ...corsHeaders() },
-  });
+    return new Response(JSON.stringify({
+      total: meta.total ? Number(meta.total) : null,
+      newest: meta.newest || null,
+      oldest: meta.oldest || null,
+      last_attempt: meta.last_attempt || null,
+      last_status: meta.last_status || null,
+    }), {
+      headers: { "Content-Type": "application/json", ...corsHeaders() },
+    });
+  } catch (e) {
+    return new Response(JSON.stringify({ error: e.message }), {
+      status: 500,
+      headers: { "Content-Type": "application/json", ...corsHeaders() },
+    });
+  }
 }
 
 async function handleOembed(url) {
