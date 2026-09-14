@@ -41,6 +41,15 @@ def update_stats():
     set_meta("oldest", str(row["oldest"]))
 
 
+def get_last_max_created():
+    try:
+        rows = query_d1("SELECT MAX(createdAtMillis) as m FROM notes")
+        val = rows[0]["m"]
+        return int(val) if val else 0
+    except Exception:
+        return 0
+
+
 def get_chunk_urls_for(day):
     base = f"https://ton.twimg.com/birdwatch-public-data/{day.year}/{day.month:02d}/{day.day:02d}/notes"
     chunks = []
@@ -103,7 +112,7 @@ def cleanup_old_notes():
     r.raise_for_status()
 
 
-def process_rows(reader):
+def process_rows(reader, last_max_created):
     cutoff_millis = int((datetime.now(timezone.utc) - timedelta(days=MAX_AGE_DAYS)).timestamp() * 1000)
 
     row_buffer = []
@@ -112,7 +121,7 @@ def process_rows(reader):
 
     for row in reader:
         created = row.get("createdAtMillis")
-        if not created or int(created) < cutoff_millis:
+        if not created or int(created) < cutoff_millis or int(created) <= last_max_created:
             continue
 
         row_buffer.append((
@@ -140,14 +149,14 @@ def process_rows(reader):
     return total
 
 
-def stream_and_insert_tsv(url):
+def stream_and_insert_tsv(url, last_max_created):
     with requests.get(url, stream=True, headers=UA) as resp:
         resp.raise_for_status()
         lines = (line.decode("utf-8") for line in resp.iter_lines())
-        return process_rows(csv.DictReader(lines, delimiter="\t"))
+        return process_rows(csv.DictReader(lines, delimiter="\t"), last_max_created)
 
 
-def stream_and_insert_zip(url):
+def stream_and_insert_zip(url, last_max_created):
     with tempfile.NamedTemporaryFile() as tmp:
         with requests.get(url, stream=True, headers=UA) as resp:
             resp.raise_for_status()
@@ -158,21 +167,25 @@ def stream_and_insert_zip(url):
             inner_name = zf.namelist()[0]
             with zf.open(inner_name) as f:
                 lines = (line.decode("utf-8") for line in f)
-                return process_rows(csv.DictReader(lines, delimiter="\t"))
+                return process_rows(csv.DictReader(lines, delimiter="\t"), last_max_created)
 
 
 def run():
-    chunks = get_all_chunk_urls()
     cleanup_old_notes()
+
+    last_max_created = get_last_max_created()
+    print(f"Bereits gespeichert bis createdAtMillis: {last_max_created}")
+
+    chunks = get_all_chunk_urls()
     print(f"{len(chunks)} Chunk-Dateien gefunden")
     grand_total = 0
     for url, is_zip in chunks:
         print(f"Verarbeite: {url}")
-        n = stream_and_insert_zip(url) if is_zip else stream_and_insert_tsv(url)
+        n = stream_and_insert_zip(url, last_max_created) if is_zip else stream_and_insert_tsv(url, last_max_created)
         print(f"{url}: {n} Zeilen verarbeitet")
         grand_total += n
     print(f"Fertig, insgesamt {grand_total} Zeilen")
-    
+
     print("Alte Notes außerhalb des Zeitfensters aufgeräumt")
     update_stats()
     print("Statistik aktualisiert")
