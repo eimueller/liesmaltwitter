@@ -369,6 +369,26 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+async function ladeAnfangsNotes() {
+  const box = document.getElementById("ergebnisse");
+  box.innerHTML = '<div class="status">Lädt aktuelle Notes...</div>';
+  try {
+    const res = await fetch(`${WORKER_URL}?sort=desc`);
+    const notes = await res.json();
+    const neueste10 = notes.slice(0, 10);
+
+    if (neueste10.length === 0) {
+      box.innerHTML = '<div class="status">Keine Notes vorhanden.</div>';
+      return;
+    }
+
+    const countLine = `<div class="result-count">Neueste ${neueste10.length} Notes – zum Suchen oben Filter eingeben</div>`;
+    box.innerHTML = countLine + neueste10.map(n => renderPlainNote(n)).join("");
+  } catch (e) {
+    box.innerHTML = '<div class="status">Fehler beim Laden.</div>';
+  }
+}
+
 (function init() {
   const params = new URLSearchParams(window.location.search);
   if ([...params.keys()].length > 0) {
@@ -377,6 +397,7 @@ document.addEventListener("keydown", (e) => {
   } else {
     const saved = loadLocalFilters();
     if (saved) applyFieldsState(saved);
+    ladeAnfangsNotes();
   }
 })();
 
