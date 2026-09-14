@@ -314,7 +314,9 @@ async function ladeStatus() {
   try {
     const res = await fetch(`${WORKER_URL}/status`);
     const data = await res.json();
-
+    const readsPercent = data.reads_percent != null ? data.reads_percent : 0;
+    const searchesLeft = data.est_searches_left != null ? data.est_searches_left : "unbekannt";
+    const warnColor = readsPercent > 80 ? "⚠️ " : "";
     const total = data.total != null ? Number(data.total).toLocaleString("de-DE") : "unbekannt";
     const neuestesDatum = data.newest ? new Date(Number(data.newest)).toLocaleDateString("de-DE") : "unbekannt";
     const aeltestesDatum = data.oldest ? new Date(Number(data.oldest)).toLocaleDateString("de-DE") : "unbekannt";
