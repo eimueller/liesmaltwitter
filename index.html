@@ -323,9 +323,10 @@ async function ladeStatus() {
     const letzterVersuch = data.last_attempt ? new Date(data.last_attempt).toLocaleString("de-DE") : "unbekannt";
     const statusText = data.last_status === "ok" ? "erfolgreich" : data.last_status === "error" ? "fehlgeschlagen ⚠️" : "unbekannt";
 
-    el.innerHTML =
+        el.innerHTML =
       `📚 ${total} Notes im Archiv · ältester Note vom ${aeltestesDatum} · neuester Note vom ${neuestesDatum}<br>` +
-      `🔄 Letzter Fetch-Versuch: ${letzterVersuch} (${statusText})`;
+      `🔄 Letzter Fetch-Versuch: ${letzterVersuch} (${statusText})<br>` +
+      `${warnColor}📊 Lesekontingent heute: ${readsPercent}% genutzt · noch ca. ${searchesLeft} Stichwort-Suchen realistisch möglich`;
   } catch (e) {
     el.textContent = "Status konnte nicht geladen werden (" + e.message + ")";
   }
