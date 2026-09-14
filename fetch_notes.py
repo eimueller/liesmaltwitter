@@ -16,7 +16,7 @@ UA = {"User-Agent": "Mozilla/5.0"}
 
 ROWS_PER_STATEMENT = 12        # 12 Zeilen x 8 Spalten = 96 Parameter, unter dem D1-Limit von 100
 STATEMENTS_PER_REQUEST = 50
-MAX_AGE_DAYS = 365
+MAX_AGE_DAYS = 300
 
 
 def set_meta(key, value):
@@ -163,6 +163,7 @@ def stream_and_insert_zip(url):
 
 def run():
     chunks = get_all_chunk_urls()
+    cleanup_old_notes()
     print(f"{len(chunks)} Chunk-Dateien gefunden")
     grand_total = 0
     for url, is_zip in chunks:
@@ -171,7 +172,7 @@ def run():
         print(f"{url}: {n} Zeilen verarbeitet")
         grand_total += n
     print(f"Fertig, insgesamt {grand_total} Zeilen")
-    cleanup_old_notes()
+    
     print("Alte Notes außerhalb des Zeitfensters aufgeräumt")
     update_stats()
     print("Statistik aktualisiert")
