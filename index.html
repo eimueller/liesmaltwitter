@@ -31,10 +31,28 @@
   }
 
   h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+  .subtitle { color: var(--text-secondary); font-size: 14px; margin: 0 0 16px; }
 
-  .subtitle { color: var(--text-secondary); font-size: 14px; margin: 0 0 8px; }
+  .howto {
+    margin-bottom: 18px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .howto summary {
+    cursor: pointer;
+    color: var(--text-primary);
+    font-weight: 600;
+    font-size: 14px;
+  }
+  .howto p { margin: 10px 0 6px; }
+  .howto ul { margin: 6px 0 4px; padding-left: 18px; }
+  .howto li { margin-bottom: 4px; }
 
-  #stand {
+  #archiv-info {
     font-family: var(--mono);
     font-size: 12px;
     color: var(--text-secondary);
@@ -66,8 +84,7 @@
     padding: 0 10px; border-radius: 6px;
   }
 
-  .row2 { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
-
+  .row2 { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 20px; }
   select#sort { margin-left: auto; }
 
   button {
@@ -75,16 +92,16 @@
     padding: 9px 18px; border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer;
   }
   button:hover { opacity: 0.85; }
-  button:disabled { opacity: 0.5; cursor: default; }
 
-  #embed-controls { margin-bottom: 20px; }
-  #embed-controls button {
+  button.secondary {
     background: var(--bg-elevated);
     color: var(--text-primary);
     border: 1px solid var(--border);
     font-weight: 400;
     font-size: 13px;
   }
+
+  .result-count { font-size: 13px; color: var(--text-secondary); padding: 0 4px 14px; }
 
   #ergebnisse { display: flex; flex-direction: column; }
 
@@ -113,8 +130,6 @@
   .note a.link { color: var(--text-secondary); text-decoration: none; font-size: 16px; padding-top: 2px; }
   .note a.link:hover { color: var(--text-primary); }
 
-  .note-embed { padding: 12px 4px; border-bottom: 1px solid var(--border); }
-
   .status { color: var(--text-secondary); font-size: 14px; padding: 24px 4px; }
 
   @media (max-width: 560px) {
@@ -132,7 +147,21 @@
 
 <h1>Community Notes durchsuchen</h1>
 <p class="subtitle">Archiv der letzten Monate, täglich aktualisiert</p>
-<p id="stand">Lade Status...</p>
+
+<details class="howto">
+  <summary>Wie funktioniert diese Seite?</summary>
+  <p>Einmal täglich lädt ein automatisiertes Skript den öffentlichen Community-Notes-Datensatz von X (Twitter) herunter und speichert neue Notes in dieser Datenbank.</p>
+  <p><strong>Filtern:</strong></p>
+  <ul>
+    <li><strong>Stichwort:</strong> durchsucht den Note-Text. <code>wort1 AND wort2</code> verlangt beide Wörter, <code>wort1 OR wort2</code> reicht mit einem.</li>
+    <li><strong>Klassifikation:</strong> ob X die zugrundeliegende Aussage als irreführend oder korrekt eingestuft hat.</li>
+    <li><strong>Zeitraum:</strong> filtert nach dem Erstellungsdatum der Note.</li>
+    <li><strong>Quellenangabe / Media-Notes:</strong> engt auf Notes mit Belegen bzw. auf Notes zu Bild/Video-Inhalten ein.</li>
+  </ul>
+  <p><strong>Was wird angezeigt:</strong> nur Notes der letzten ca. 300 Tage, maximal 50 Treffer pro Suche, sortiert nach Datum. Ältere Notes werden aus Speicherplatzgründen automatisch entfernt.</p>
+</details>
+
+<p id="archiv-info">Lade Archiv-Info...</p>
 
 <div class="filters">
   <input type="text" id="q" placeholder="Stichwort... (AND / OR verwendbar)">
@@ -153,20 +182,15 @@
     <option value="asc">Älteste zuerst</option>
   </select>
   <button onclick="suchen()">Suchen</button>
-</div>
-
-<div class="row2" id="embed-controls">
-  <button id="embedToggle" onclick="toggleEmbeds()">Original-Tweets anzeigen (lädt Cookies von X)</button>
-  <label id="availOnlyLabel" style="display:none;">
-    <input type="checkbox" id="availOnly" onchange="suchen()"> Nur verfügbare Original-Tweets anzeigen
-  </label>
+  <button class="secondary" onclick="resetFilters()">Zurücksetzen</button>
+  <button class="secondary" id="shareBtn" onclick="teileSuche()">Suche teilen</button>
 </div>
 
 <div id="ergebnisse"><div class="status">Gib einen Suchbegriff ein oder klicke direkt auf „Suchen“.</div></div>
 
 <script>
 const WORKER_URL = "https://notes-worker.twitterdbworker.workers.dev";
-let embedsEnabled = false;
+const LS_KEY = "notes_filters_v1";
 
 function tagInfo(classification) {
   if (classification === "MISINFORMED_OR_POTENTIALLY_MISLEADING") return { css: "misleading", label: "Irreführend" };
@@ -208,69 +232,109 @@ function renderPlainNote(n) {
     </div>`;
 }
 
-function loadTwitterWidgetScript() {
-  return new Promise((resolve) => {
-    if (window.twttr) return resolve();
-    const s = document.createElement("script");
-    s.src = "https://platform.twitter.com/widgets.js";
-    s.onload = resolve;
-    document.body.appendChild(s);
-  });
+function getFieldsState() {
+  return {
+    q: document.getElementById("q").value,
+    classification: document.getElementById("classification").value,
+    from: document.getElementById("from").value,
+    to: document.getElementById("to").value,
+    sources: document.getElementById("sources").checked,
+    media: document.getElementById("media").checked,
+    sort: document.getElementById("sort").value,
+  };
 }
 
-async function toggleEmbeds() {
-  embedsEnabled = true;
-  document.getElementById("embedToggle").textContent = "Original-Tweets aktiv ✓";
-  document.getElementById("embedToggle").disabled = true;
-  document.getElementById("availOnlyLabel").style.display = "flex";
-  await loadTwitterWidgetScript();
-  suchen();
+function applyFieldsState(state) {
+  document.getElementById("q").value = state.q || "";
+  document.getElementById("classification").value = state.classification || "";
+  document.getElementById("from").value = state.from || "";
+  document.getElementById("to").value = state.to || "";
+  document.getElementById("sources").checked = !!state.sources;
+  document.getElementById("media").checked = !!state.media;
+  document.getElementById("sort").value = state.sort || "desc";
 }
 
-async function fetchOembedHtml(tweetId) {
-  const url = `https://publish.x.com/oembed?url=https://x.com/i/web/status/${tweetId}&omit_script=true&dnt=true`;
+function stateToParams(state) {
+  const params = new URLSearchParams();
+  if (state.q) params.set("q", state.q);
+  if (state.classification) params.set("classification", state.classification);
+  if (state.from) params.set("from", state.from);
+  if (state.to) params.set("to", state.to);
+  if (state.sources) params.set("sources", "true");
+  if (state.media) params.set("media", "true");
+  params.set("sort", state.sort || "desc");
+  return params;
+}
+
+function paramsToState(params) {
+  return {
+    q: params.get("q") || "",
+    classification: params.get("classification") || "",
+    from: params.get("from") || "",
+    to: params.get("to") || "",
+    sources: params.get("sources") === "true",
+    media: params.get("media") === "true",
+    sort: params.get("sort") || "desc",
+  };
+}
+
+function saveLocalFilters(state) {
+  try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch (e) {}
+}
+
+function loadLocalFilters() {
   try {
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data.html || null;
+    const raw = localStorage.getItem(LS_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+
+function resetFilters() {
+  applyFieldsState({ q: "", classification: "", from: "", to: "", sources: false, media: false, sort: "desc" });
+  history.replaceState(null, "", window.location.pathname);
+  try { localStorage.removeItem(LS_KEY); } catch (e) {}
+  document.getElementById("ergebnisse").innerHTML = '<div class="status">Gib einen Suchbegriff ein oder klicke direkt auf „Suchen“.</div>';
+}
+
+async function teileSuche() {
+  const url = window.location.href;
+  const btn = document.getElementById("shareBtn");
+  try {
+    await navigator.clipboard.writeText(url);
+    const original = btn.textContent;
+    btn.textContent = "Link kopiert ✓";
+    setTimeout(() => { btn.textContent = original; }, 1500);
   } catch (e) {
-    return null;
+    prompt("Link zum Kopieren:", url);
   }
 }
 
 async function ladeStatus() {
+  const el = document.getElementById("archiv-info");
   try {
     const res = await fetch(`${WORKER_URL}/status`);
     const data = await res.json();
-    const neuestesDatum = new Date(Number(data.newest)).toLocaleString("de-DE");
-    const aeltestesDatum = new Date(Number(data.oldest)).toLocaleDateString("de-DE");
-    const letzterVersuch = data.last_attempt ? new Date(data.last_attempt).toLocaleString("de-DE") : "unbekannt";
-    const statusText = data.last_status === "ok" ? "erfolgreich" : data.last_status === "error" ? "fehlgeschlagen" : "unbekannt";
 
-    document.getElementById("stand").innerHTML =
-      `Stand: ${data.total.toLocaleString("de-DE")} Notes · Zeitraum ${aeltestesDatum} bis ${neuestesDatum}<br>` +
-      `Letzter Update-Versuch: ${letzterVersuch} (${statusText})`;
+    const total = data.total != null ? Number(data.total).toLocaleString("de-DE") : "unbekannt";
+    const neuestesDatum = data.newest ? new Date(Number(data.newest)).toLocaleDateString("de-DE") : "unbekannt";
+    const aeltestesDatum = data.oldest ? new Date(Number(data.oldest)).toLocaleDateString("de-DE") : "unbekannt";
+    const letzterVersuch = data.last_attempt ? new Date(data.last_attempt).toLocaleString("de-DE") : "unbekannt";
+    const statusText = data.last_status === "ok" ? "erfolgreich" : data.last_status === "error" ? "fehlgeschlagen ⚠️" : "unbekannt";
+
+    el.innerHTML =
+      `📚 ${total} Notes im Archiv · ältester Note vom ${aeltestesDatum} · neuester Note vom ${neuestesDatum}<br>` +
+      `🔄 Letzter Fetch-Versuch: ${letzterVersuch} (${statusText})`;
   } catch (e) {
-    document.getElementById("stand").textContent = "Status konnte nicht geladen werden.";
+    el.textContent = "Status konnte nicht geladen werden (" + e.message + ")";
   }
 }
 
 async function suchen() {
-  const params = new URLSearchParams();
-  const q = document.getElementById("q").value;
-  const classification = document.getElementById("classification").value;
-  const from = document.getElementById("from").value;
-  const to = document.getElementById("to").value;
-  const sort = document.getElementById("sort").value;
+  const state = getFieldsState();
+  const params = stateToParams(state);
 
-  if (q) params.set("q", q);
-  if (classification) params.set("classification", classification);
-  if (from) params.set("from", from);
-  if (to) params.set("to", to);
-  if (document.getElementById("sources").checked) params.set("sources", "true");
-  if (document.getElementById("media").checked) params.set("media", "true");
-  params.set("sort", sort);
+  history.replaceState(null, "", "?" + params.toString());
+  saveLocalFilters(state);
 
   const box = document.getElementById("ergebnisse");
   box.innerHTML = '<div class="status">Lädt...</div>';
@@ -289,38 +353,32 @@ async function suchen() {
     return;
   }
 
-  if (!embedsEnabled) {
-    box.innerHTML = notes.map(n => renderPlainNote(n)).join("");
-    return;
-  }
-
-  box.innerHTML = '<div class="status">Lade Original-Tweets...</div>';
-  const withEmbeds = await Promise.all(notes.map(async n => {
-    const html = n.tweetId ? await fetchOembedHtml(n.tweetId) : null;
-    return { note: n, embedHtml: html };
-  }));
-
-  const availOnly = document.getElementById("availOnly").checked;
-  const visible = availOnly ? withEmbeds.filter(x => x.embedHtml) : withEmbeds;
-
-  if (visible.length === 0) {
-    box.innerHTML = '<div class="status">Keine Treffer (mit verfügbarem Original-Tweet).</div>';
-    return;
-  }
-
-  box.innerHTML = visible.map(x => {
-    if (x.embedHtml) {
-      return `<div class="note-embed">${x.embedHtml}</div>`;
-    }
-    return renderPlainNote(x.note) + '<div class="status" style="padding:0 4px 16px;">Original-Tweet nicht verfügbar (gelöscht/privat)</div>';
-  }).join("");
-
-  if (window.twttr) window.twttr.widgets.load();
+  const countLine = `<div class="result-count">${notes.length} Treffer${notes.length === 50 ? " (mehr vorhanden – Suche verfeinern für alle Ergebnisse)" : ""}</div>`;
+  box.innerHTML = countLine + notes.map(n => renderPlainNote(n)).join("");
 }
 
 document.getElementById("q").addEventListener("keydown", (e) => {
   if (e.key === "Enter") suchen();
 });
+
+document.addEventListener("keydown", (e) => {
+  const tag = document.activeElement.tagName;
+  if (e.key === "/" && tag !== "INPUT" && tag !== "SELECT" && tag !== "TEXTAREA") {
+    e.preventDefault();
+    document.getElementById("q").focus();
+  }
+});
+
+(function init() {
+  const params = new URLSearchParams(window.location.search);
+  if ([...params.keys()].length > 0) {
+    applyFieldsState(paramsToState(params));
+    suchen();
+  } else {
+    const saved = loadLocalFilters();
+    if (saved) applyFieldsState(saved);
+  }
+})();
 
 ladeStatus();
 </script>
